@@ -3,6 +3,9 @@ package wdog
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -36,6 +39,8 @@ type WDog struct {
 
 	toleranceWindow time.Duration
 	toleranceCap    int32
+
+	debug bool
 }
 
 type Noise struct {
@@ -48,7 +53,7 @@ type Noise struct {
 }
 
 type Owner interface {
-	Hear(context.Context, Noise)
+	Hear(Noise)
 }
 
 func New(ow Owner) *WDog {
@@ -62,6 +67,7 @@ func New(ow Owner) *WDog {
 		teardownTimeout: time.Millisecond * 50,
 		toleranceWindow: time.Millisecond * 100,
 		toleranceCap:    2,
+		debug:           os.Getenv("WDOG_DEBUG") == "true",
 	}
 }
 
@@ -95,12 +101,12 @@ func (w *WDog) WithToleranceCap(d int32) {
 	w.toleranceCap = d
 }
 
-func (w *WDog) Watch(ctx context.Context) {
-	go w.monitorTolerance(ctx)
-	go w.listenToHall(ctx)
+func (w *WDog) Watch() {
+	go w.monitorTolerance()
+	go w.listenToHall()
 }
 
-func (w *WDog) monitorTolerance(ctx context.Context) {
+func (w *WDog) monitorTolerance() {
 	w.m.Lock()
 	w.ticker = time.NewTicker(w.toleranceWindow)
 	defer w.ticker.Stop()
@@ -108,12 +114,13 @@ func (w *WDog) monitorTolerance(ctx context.Context) {
 
 	for {
 		select {
-		case <-ctx.Done():
-			return
 		case <-w.ticker.C:
 			errCountSnapshot := atomic.LoadInt32(&w.errCount)
+			w.log(fmt.Sprintf("monitoring tolerance err count: %d", errCountSnapshot))
+
 			if errCountSnapshot >= w.toleranceCap {
-				w.emitNoise(ctx, Noise{
+				w.log("tolerance exceeded")
+				go w.emitNoise(Noise{
 					Type:     Bark,
 					ErrCount: errCountSnapshot,
 					Error:    ErrToleranceExceeded,
@@ -125,26 +132,33 @@ func (w *WDog) monitorTolerance(ctx context.Context) {
 	}
 }
 
-func (w *WDog) emitNoise(ctx context.Context, noise Noise) {
+func (w *WDog) emitNoise(noise Noise) {
 	select {
 	case w.hall <- noise:
+		w.log("emitted noise to hall")
 	case <-time.After(w.teardownTimeout):
-	case <-ctx.Done():
+		w.log("timeout emitting noise to hall")
 	}
 }
 
-func (w *WDog) listenToHall(ctx context.Context) {
+func (w *WDog) listenToHall() {
 	for {
 		select {
-		case <-ctx.Done():
-			return
 		case noise := <-w.hall:
-			go w.owner.Hear(ctx, noise)
+			w.log("listening to hall noise")
+			go w.owner.Hear(noise)
 		}
 	}
 }
 
+func (w *WDog) log(msg string) {
+	if w.debug {
+		log.Println("DEBUG (wdog): " + msg)
+	}
+}
+
 func (w *WDog) Go(ctx context.Context, t func(ctx context.Context)) {
+	w.log("going up")
 	done := make(chan struct{})
 
 	go func() {
@@ -152,30 +166,38 @@ func (w *WDog) Go(ctx context.Context, t func(ctx context.Context)) {
 		defer func() {
 			if r := recover(); r != nil {
 				atomic.AddInt32(&w.errCount, 1)
-				w.emitNoise(ctx, Noise{
+				go w.emitNoise(Noise{
 					Type:    Cry,
 					Error:   ErrTaskPanicked,
 					Payload: r,
 				})
+				w.log("recovered from panic")
 			}
 		}()
+
 		t(ctx)
+		w.log("task completed")
 	}()
 
-	select {
-	case <-done:
-		return
-	case <-ctx.Done():
+	go func() {
 		select {
 		case <-done:
+			w.log("task completed before ctx cancellation")
 			return
-		case <-time.After(w.teardownTimeout):
-			atomic.AddInt32(&w.errCount, 1)
-			go w.emitNoise(ctx, Noise{
-				Type:  Growl,
-				Error: ErrTaskNotContextCompliant,
-			})
-			return
+		case <-ctx.Done():
+			select {
+			case <-done:
+				w.log("task completed before teardown timeout")
+				return
+			case <-time.After(w.teardownTimeout):
+				w.log("task teardown timeout")
+				atomic.AddInt32(&w.errCount, 1)
+				go w.emitNoise(Noise{
+					Type:  Growl,
+					Error: ErrTaskNotContextCompliant,
+				})
+				return
+			}
 		}
-	}
+	}()
 }

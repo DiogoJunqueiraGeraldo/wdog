@@ -48,7 +48,7 @@ type Noise struct {
 }
 
 type Owner interface {
-	Header(noise Noise)
+	Hear(noise Noise)
 }
 
 type Task interface {
@@ -143,7 +143,7 @@ func (w *WDog) listenToHall(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case noise := <-w.hall:
-			w.owner.Header(noise)
+			w.owner.Hear(noise)
 		}
 	}
 }

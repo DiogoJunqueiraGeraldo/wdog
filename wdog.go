@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -26,21 +24,15 @@ const (
 )
 
 type WDog struct {
-	m sync.RWMutex
-
 	owner Owner
 
-	errCount    int32
-	hall        chan Noise
-	hallTimeout time.Duration
-	ticker      *time.Ticker
-
+	errCount        int32
+	hall            chan Noise
+	hallTimeout     time.Duration
 	teardownTimeout time.Duration
-
 	toleranceWindow time.Duration
 	toleranceCap    int32
-
-	debug bool
+	isDebug         bool
 }
 
 type Noise struct {
@@ -56,49 +48,19 @@ type Owner interface {
 	Hear(Noise)
 }
 
-func New(ow Owner) *WDog {
-	hall := make(chan Noise, 1024)
+func New(cfg *Configuration) *WDog {
+	hall := make(chan Noise, cfg.hallSize)
 
 	return &WDog{
 		errCount:        0,
 		hall:            hall,
-		hallTimeout:     time.Millisecond * 5,
-		owner:           ow,
-		teardownTimeout: time.Millisecond * 50,
-		toleranceWindow: time.Millisecond * 100,
-		toleranceCap:    2,
-		debug:           os.Getenv("WDOG_DEBUG") == "true",
+		hallTimeout:     cfg.hallTimeout,
+		owner:           cfg.owner,
+		teardownTimeout: cfg.teardownTimeout,
+		toleranceWindow: cfg.toleranceWindow,
+		toleranceCap:    cfg.toleranceCap,
+		isDebug:         cfg.isDebug,
 	}
-}
-
-func (w *WDog) WithTeardownTimeout(d time.Duration) {
-	if w.ticker != nil {
-		panic("watchdog already working")
-	}
-
-	w.m.Lock()
-	defer w.m.Unlock()
-	w.teardownTimeout = d
-}
-
-func (w *WDog) WithToleranceWindow(d time.Duration) {
-	if w.ticker != nil {
-		panic("watchdog already working")
-	}
-
-	w.m.Lock()
-	defer w.m.Unlock()
-	w.toleranceWindow = d
-}
-
-func (w *WDog) WithToleranceCap(d int32) {
-	if w.ticker != nil {
-		panic("watchdog already working")
-	}
-
-	w.m.Lock()
-	defer w.m.Unlock()
-	w.toleranceCap = d
 }
 
 func (w *WDog) Watch() {
@@ -107,25 +69,21 @@ func (w *WDog) Watch() {
 }
 
 func (w *WDog) monitorTolerance() {
-	w.m.Lock()
-	w.ticker = time.NewTicker(w.toleranceWindow)
-	defer w.ticker.Stop()
-	w.m.Unlock()
+	ticker := time.NewTicker(w.toleranceWindow)
 
 	for {
 		select {
-		case <-w.ticker.C:
+		case <-ticker.C:
 			errCountSnapshot := atomic.LoadInt32(&w.errCount)
 			w.log(fmt.Sprintf("monitoring tolerance err count: %d", errCountSnapshot))
 
 			if errCountSnapshot >= w.toleranceCap {
 				w.log("tolerance exceeded")
-				go w.emitNoise(Noise{
+				w.emitNoise(Noise{
 					Type:     Bark,
 					ErrCount: errCountSnapshot,
 					Error:    ErrToleranceExceeded,
 				})
-
 				atomic.StoreInt32(&w.errCount, 0)
 			}
 		}
@@ -152,7 +110,7 @@ func (w *WDog) listenToHall() {
 }
 
 func (w *WDog) log(msg string) {
-	if w.debug {
+	if w.isDebug {
 		log.Println("DEBUG (wdog): " + msg)
 	}
 }
@@ -165,8 +123,7 @@ func (w *WDog) Go(ctx context.Context, t func(ctx context.Context)) {
 		defer close(done)
 		defer func() {
 			if r := recover(); r != nil {
-				atomic.AddInt32(&w.errCount, 1)
-				go w.emitNoise(Noise{
+				w.emitNoise(Noise{
 					Type:    Cry,
 					Error:   ErrTaskPanicked,
 					Payload: r,

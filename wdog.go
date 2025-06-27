@@ -104,7 +104,7 @@ func (w *WDog) listenToHall() {
 		select {
 		case noise := <-w.hall:
 			w.log("listening to hall noise")
-			go w.owner.Hear(noise)
+			w.owner.Hear(noise)
 		}
 	}
 }
@@ -140,20 +140,17 @@ func (w *WDog) Go(ctx context.Context, t func(ctx context.Context)) {
 		select {
 		case <-done:
 			w.log("task completed before ctx cancellation")
-			return
 		case <-ctx.Done():
 			select {
 			case <-done:
 				w.log("task completed before teardown timeout")
-				return
 			case <-time.After(w.teardownTimeout):
 				w.log("task teardown timeout")
 				atomic.AddInt32(&w.errCount, 1)
-				go w.emitNoise(Noise{
+				w.emitNoise(Noise{
 					Type:  Growl,
 					Error: ErrTaskNotContextCompliant,
 				})
-				return
 			}
 		}
 	}()

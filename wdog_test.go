@@ -2,83 +2,23 @@ package wdog_test
 
 import (
 	"context"
-	"errors"
-	"fmt"
+
 	"github.com/DiogoJunqueiraGeraldo/wdog"
+	"github.com/DiogoJunqueiraGeraldo/wdog/internal"
 	"testing"
 	"time"
 )
 
-type OwnerFake struct {
-	NoiseMemory []wdog.Noise
-}
-
-func NewOwnerFake() *OwnerFake {
-	return &OwnerFake{
-		NoiseMemory: make([]wdog.Noise, 0, 1024),
-	}
-}
-
-func (o *OwnerFake) Hear(noise wdog.Noise) {
-	o.NoiseMemory = append(o.NoiseMemory, noise)
-}
-
-func (o *OwnerFake) LastNoise() wdog.Noise {
-	noiseLen := len(o.NoiseMemory)
-	if noiseLen == 0 {
-		return wdog.Silence
-	}
-
-	return o.NoiseMemory[noiseLen-1]
-}
-
-func (o *OwnerFake) DiffHistory(expect []wdog.NoiseType) error {
-	if len(o.NoiseMemory) < len(expect) {
-		msg := fmt.Sprintf("Missing expected noises, expected len %d, got %d", len(expect), len(o.NoiseMemory))
-		return errors.New(msg)
-	}
-
-	if len(o.NoiseMemory) > len(expect) {
-		msg := fmt.Sprintf("More than expected noises, expected len %d, got %d", len(expect), len(o.NoiseMemory))
-		return errors.New(msg)
-	}
-
-	var err error
-	for i, noise := range o.NoiseMemory {
-		if noise.Type != expect[i] {
-			msg := fmt.Sprintf("Mismatch noise type at %d, want %s, got %s", i, expect[i], noise.Type)
-			err = errors.Join(err, errors.New(msg))
-		}
-	}
-
-	return err
-}
-
-func nonCompliantTask(_ context.Context) {
-	time.Sleep(time.Second * 1)
-}
-
-func panicTask(_ context.Context) {
-	panic("panic")
-}
-
-func compliantTask(ctx context.Context) {
-	select {
-	case <-ctx.Done():
-	case <-time.After(time.Second * 1):
-	}
-}
-
 func TestNonCompliantTaskWithoutCancel(t *testing.T) {
 	t.Parallel()
 
-	ow := NewOwnerFake()
+	ow := thelp.NewOwnerFake()
 	wd := wdog.New(wdog.NewConfiguration(ow))
 	wd.Watch()
 	defer wd.Close()
 
 	ctx := context.Background()
-	wd.Go(ctx, nonCompliantTask)
+	wd.Go(ctx, thelp.NonCompliantTask)
 
 	// Teardown time
 	time.Sleep(time.Millisecond * 500)
@@ -91,13 +31,13 @@ func TestNonCompliantTaskWithoutCancel(t *testing.T) {
 func TestNonCompliantTaskWithCancel(t *testing.T) {
 	t.Parallel()
 
-	ow := NewOwnerFake()
+	ow := thelp.NewOwnerFake()
 	wd := wdog.New(wdog.NewConfiguration(ow))
 	wd.Watch()
 	defer wd.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	wd.Go(ctx, nonCompliantTask)
+	wd.Go(ctx, thelp.NonCompliantTask)
 	cancel()
 
 	// Teardown time
@@ -112,15 +52,15 @@ func TestNonCompliantTaskWithCancel(t *testing.T) {
 func TestNonCompliantTaskWithCancelMultipleTimes(t *testing.T) {
 	t.Parallel()
 
-	ow := NewOwnerFake()
+	ow := thelp.NewOwnerFake()
 	wd := wdog.New(wdog.NewConfiguration(ow))
 	wd.Watch()
 	defer wd.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	wd.Go(ctx, nonCompliantTask)
-	wd.Go(ctx, nonCompliantTask)
-	wd.Go(ctx, nonCompliantTask)
+	wd.Go(ctx, thelp.NonCompliantTask)
+	wd.Go(ctx, thelp.NonCompliantTask)
+	wd.Go(ctx, thelp.NonCompliantTask)
 	cancel()
 
 	// Teardown time
@@ -135,16 +75,16 @@ func TestNonCompliantTaskWithCancelMultipleTimes(t *testing.T) {
 func TestCompliantTaskWithCancelMultipleTimes(t *testing.T) {
 	t.Parallel()
 
-	ow := NewOwnerFake()
+	ow := thelp.NewOwnerFake()
 	wd := wdog.New(wdog.NewConfiguration(ow))
 
 	wd.Watch()
 	defer wd.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	wd.Go(ctx, compliantTask)
-	wd.Go(ctx, compliantTask)
-	wd.Go(ctx, compliantTask)
+	wd.Go(ctx, thelp.CompliantTask)
+	wd.Go(ctx, thelp.CompliantTask)
+	wd.Go(ctx, thelp.CompliantTask)
 	cancel()
 
 	// Teardown time
@@ -158,16 +98,16 @@ func TestCompliantTaskWithCancelMultipleTimes(t *testing.T) {
 func TestPanicTaskMultipleTimes(t *testing.T) {
 	t.Parallel()
 
-	ow := NewOwnerFake()
+	ow := thelp.NewOwnerFake()
 	wd := wdog.New(wdog.NewConfiguration(ow))
 
 	wd.Watch()
 	defer wd.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	wd.Go(ctx, panicTask)
-	wd.Go(ctx, panicTask)
-	wd.Go(ctx, panicTask)
+	wd.Go(ctx, thelp.PanicTask)
+	wd.Go(ctx, thelp.PanicTask)
+	wd.Go(ctx, thelp.PanicTask)
 	cancel()
 
 	// Teardown time

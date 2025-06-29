@@ -70,6 +70,10 @@ type Option func(*Configuration)
 //
 // The debug mode will automatically activate if the WDG_DEBUG environment variable is set to "true".
 func NewConfiguration(owner Owner, opts ...Option) *Configuration {
+	if owner == nil {
+		panic("owner cannot be nil")
+	}
+
 	c := &Configuration{
 		owner: owner,
 
@@ -88,17 +92,6 @@ func NewConfiguration(owner Owner, opts ...Option) *Configuration {
 	}
 
 	return c
-}
-
-// WithOwner overrides the default Owner associated with the watchdog.
-func WithOwner(owner Owner) Option {
-	if owner == nil {
-		panic("owner cannot be nil")
-	}
-
-	return func(cfg *Configuration) {
-		cfg.owner = owner
-	}
 }
 
 // WithHallSize sets the buffer size of the internal alert channel.
